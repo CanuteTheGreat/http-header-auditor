@@ -1,0 +1,43 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "http-header-auditor"
+dynamic = ["version"]
+description = "Live HTTP security header scanner with an A+ to F grade (HSTS, CSP, cookies, CORS, COOP/CORP, SRI)"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.8"
+authors = [{ name = "Errant Solutions", email = "hello@errant.solutions" }]
+keywords = ["http", "headers", "hsts", "csp", "security", "observatory"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Intended Audience :: System Administrators",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Topic :: Security",
+    "Topic :: System :: Systems Administration",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://errant.solutions/tools/http-header-auditor.html"
+Source = "https://git.canutethegreat.com/CanuteTheGreat/http-header-auditor"
+Changelog = "https://git.canutethegreat.com/CanuteTheGreat/http-header-auditor/src/branch/master/CHANGELOG.md"
+Releases = "https://git.canutethegreat.com/CanuteTheGreat/http-header-auditor/releases"
+
+[project.scripts]
+http-header-auditor = "http_header_auditor:main"
+
+[tool.hatch.version]
+path = "http_header_auditor.py"
+
+[tool.hatch.build.targets.wheel]
+only-include = ["http_header_auditor.py"]
+
+[tool.hatch.build.targets.sdist]
+only-include = ["http_header_auditor.py", "README.md", "LICENSE", "CHANGELOG.md", "tests"]

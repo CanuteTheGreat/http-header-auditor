@@ -41,6 +41,27 @@ PROFILES = {
                       ("Content-Security-Policy", "default-src 'self' *.example.test; script-src *"),
                       ("Set-Cookie", "x=1; HttpOnly; SameSite=None")]),
     "/missing-page": (404, [("Strict-Transport-Security", "max-age=31536000; includeSubDomains")]),
+    "/cookies": (200, GOOD[:6] + [("Set-Cookie", "__Host-sid=1; Secure; HttpOnly; SameSite=Lax; Path=/; Domain=localhost"),
+                                  ("Set-Cookie", "__Secure-pref=1; HttpOnly; SameSite=Lax"),
+                                  ("Set-Cookie", "session_token=1; Secure; SameSite=Lax"),
+                                  ("Set-Cookie", "__Host-ok=1; Secure; HttpOnly; SameSite=Strict; Path=/")]),
+    "/cors-echo": (200, GOOD[:6] + [("Access-Control-Allow-Origin", "ECHO"), ("Access-Control-Allow-Credentials", "true")]),
+    "/cors-echo-nocreds": (200, GOOD[:6] + [("Access-Control-Allow-Origin", "ECHO")]),
+    "/cors-star": (200, GOOD[:6] + [("Access-Control-Allow-Origin", "*")]),
+    "/isolated": (200, GOOD[:6] + [("Cross-Origin-Opener-Policy", "same-origin"),
+                                   ("Cross-Origin-Resource-Policy", "same-site"), ("Content-Type", "text/html")]),
+    "/sri-ok": (200, GOOD[:6] + [("Content-Type", "text/html; charset=utf-8")]),
+    "/sri-missing": (200, GOOD[:6] + [("Content-Type", "text/html")]),
+    "/sri-http": (200, GOOD[:6] + [("Content-Type", "text/html")]),
+    "/referrer-unsafe": (200, [h for h in GOOD[:6] if h[0] != "Referrer-Policy"] + [("Referrer-Policy", "unsafe-url")]),
+}
+BODIES = {
+    "/sri-ok": b'<!doctype html><script src="/local.js"></script><script src="https://cdn.example.test/a.js" '
+               b'integrity="sha384-abc" crossorigin="anonymous"></script>'
+               b'<link rel="stylesheet" href="https://cdn.example.test/a.css" integrity="sha384-def">',
+    "/sri-missing": b'<html><script src="https://cdn.example.test/a.js"></script>'
+                    b'<link rel="stylesheet" href="//cdn.example.test/a.css"></html>',
+    "/sri-http": b'<html><script src="http://cdn.example.test/a.js" integrity="sha384-x"></script></html>',
 }
 
 
@@ -60,11 +81,17 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path == "/slow":
             time.sleep(4)
+        if self.path == "/cross-host-hop":
+            self.send_response(301)
+            self.send_header("Location", "https://127.0.0.1/good")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         code, headers = PROFILES.get(self.path, (200, []))
-        body = b"<html><body>test</body></html>"
+        body = BODIES.get(self.path, b"<html><body>test</body></html>")
         self.send_response(code)
         for k, v in headers:
-            self.send_header(k, v)
+            self.send_header(k, self.headers.get("Origin", "") if v == "ECHO" else v)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -75,6 +102,12 @@ class PlainHandler(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
+        if self.path == "/sri-ok":  # first hop goes to another host's https, not this host's
+            self.send_response(301)
+            self.send_header("Location", "https://127.0.0.1/sri-ok")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         if self.path == "/bare":  # this one is served over plain HTTP without a redirect
             body = b"plain"
             self.send_response(200)
@@ -146,8 +179,11 @@ class TestChecks(unittest.TestCase):
         p, r, c = audit("https://localhost/good")
         self.assertEqual(p.returncode, 0)
         self.assertEqual(r["status_code"], 200)
-        bad = {k: v for k, v in c.items() if v["status"] != "OK"}
+        bad = {k: v for k, v in c.items() if v["status"] != "OK" and k != "COOP / COEP / CORP"}
         self.assertEqual(bad, {})
+        self.assertEqual(c["COOP / COEP / CORP"]["status"], "INFO")
+        self.assertEqual((r["score"], r["grade"]), (120, "A+"))  # 100 + preload + frame-ancestors + referrer + SameSite
+        self.assertTrue(c["Strict-Transport-Security"]["preload_eligible"])
         self.assertEqual(c["Set-Cookie"]["detail"], "cookie 'sid' OK; cookie 'csrf' OK")
         self.assertIn("http:// redirects to https://localhost/good", c["HTTP->HTTPS redirect"]["detail"])
 
@@ -179,7 +215,7 @@ class TestChecks(unittest.TestCase):
         for h in ("Strict-Transport-Security", "X-Content-Type-Options", "X-Frame-Options / frame-ancestors",
                   "Content-Security-Policy", "Referrer-Policy", "Permissions-Policy", "HTTP->HTTPS redirect"):
             self.assertEqual(c[h]["status"], "MISSING", h)
-        self.assertEqual(c["Set-Cookie"], {"header": "Set-Cookie", "status": "INFO", "detail": "No cookies set."})
+        self.assertEqual(c["Set-Cookie"], {"header": "Set-Cookie", "status": "INFO", "detail": "No cookies set.", "score": 0})
 
     def test_quoted_max_age_csp_parsing_and_samesite_none(self):
         _, _, c = audit("https://localhost/quoted")
@@ -188,6 +224,60 @@ class TestChecks(unittest.TestCase):
         self.assertIn("script-src is wildcard", csp)
         self.assertNotIn("default-src is wildcard", csp)  # *.example.test is not '*'
         self.assertIn("SameSite=None without Secure", c["Set-Cookie"]["detail"])
+
+    def test_grades(self):
+        _, r, _ = audit("https://localhost/bare")
+        # no CSP -25, no HSTS -20, no XFO -20, no nosniff -5, no redirect -20 => 10
+        self.assertEqual((r["score"], r["grade"]), (10, "F"))
+        _, r, _ = audit("https://localhost/weak")
+        self.assertEqual(r["grade"], "F")
+        _, r, c = audit("https://localhost/quoted")
+        self.assertFalse(c["Strict-Transport-Security"]["preload_eligible"])
+        self.assertIn("needs the preload directive", c["Strict-Transport-Security"]["detail"])
+
+    def test_cookie_prefixes_and_session_cookies(self):
+        _, _, c = audit("https://localhost/cookies")
+        d = c["Set-Cookie"]["detail"]
+        self.assertIn("cookie '__Host-sid' (__Host- prefix requires Secure, Path=/ and no Domain", d)
+        self.assertIn("cookie '__Secure-pref' missing: Secure (__Secure- prefix requires Secure", d)
+        self.assertIn("cookie 'session_token' missing: HttpOnly (looks like a session cookie", d)
+        self.assertIn("cookie '__Host-ok' OK", d)
+        self.assertEqual(c["Set-Cookie"]["score"], -40)  # capped
+
+    def test_cors(self):
+        _, _, c = audit("https://localhost/cors-echo")
+        self.assertEqual(c["CORS"]["status"], "FAIL")
+        self.assertIn("WITH credentials", c["CORS"]["detail"])
+        self.assertEqual(audit("https://localhost/cors-echo")[0].returncode, 1)
+        self.assertEqual(audit("https://localhost/cors-echo-nocreds")[2]["CORS"]["status"], "WEAK")
+        self.assertEqual(audit("https://localhost/cors-star")[2]["CORS"]["status"], "INFO")
+        self.assertEqual(audit("https://localhost/good")[2]["CORS"]["status"], "OK")
+
+    def test_cross_origin_isolation_headers(self):
+        c = audit("https://localhost/isolated")[2]["COOP / COEP / CORP"]
+        self.assertEqual(c["status"], "OK")
+        self.assertIn("Cross-Origin-Opener-Policy: same-origin", c["detail"])
+
+    def test_subresource_integrity(self):
+        _, _, c = audit("https://localhost/sri-ok")
+        self.assertEqual(c["Subresource Integrity"]["status"], "OK")
+        self.assertIn("All 2 cross-origin", c["Subresource Integrity"]["detail"])
+        _, _, c = audit("https://localhost/sri-missing")
+        self.assertEqual(c["Subresource Integrity"]["status"], "WEAK")
+        self.assertIn("https://cdn.example.test/a.js", c["Subresource Integrity"]["detail"])
+        self.assertIn("https://cdn.example.test/a.css", c["Subresource Integrity"]["detail"])
+        _, _, c = audit("https://localhost/sri-http")
+        self.assertEqual(c["Subresource Integrity"]["status"], "FAIL")
+        self.assertEqual(audit("https://localhost/good")[2]["Subresource Integrity"]["status"], "OK")
+
+    def test_redirect_to_another_host_first_is_weak(self):
+        c = audit("https://localhost/sri-ok")[2]["HTTP->HTTPS redirect"]
+        self.assertEqual(c["status"], "WEAK")
+        self.assertIn("first redirect goes to https://127.0.0.1/sri-ok", c["detail"])
+
+    def test_referrer_policy(self):
+        c = audit("https://localhost/referrer-unsafe")[2]["Referrer-Policy"]
+        self.assertEqual(c["status"], "WEAK")
 
     def test_error_status_still_audited(self):
         _, r, c = audit("https://localhost/missing-page")
@@ -218,7 +308,8 @@ class TestChecks(unittest.TestCase):
 class TestCli(unittest.TestCase):
     def test_text_report(self):
         p = run("https://localhost/weak", "https://localhost/good")
-        self.assertEqual(p.returncode, 0)
+        self.assertEqual(p.returncode, 1)  # /weak has MISSING checks: the default gate
+        self.assertIn("Grade: A+  (score 120/100)", p.stdout)
         self.assertIn("=== https://localhost/weak ===", p.stdout)
         self.assertIn("=== https://localhost/good ===", p.stdout)
         self.assertIn("Final URL: https://localhost/good  (HTTP 200)", p.stdout)
@@ -231,8 +322,14 @@ class TestCli(unittest.TestCase):
         self.assertEqual(run("https://localhost/good", "--fail-on-any-missing").returncode, 0)
         self.assertEqual(run("https://localhost/bare", "--fail-on-any-missing").returncode, 1)
         self.assertEqual(run("https://localhost/bare", "--fail-on-missing-hsts").returncode, 1)
-        self.assertEqual(run("https://localhost/weak", "--fail-on-missing-hsts").returncode, 0)  # weak != missing
-        self.assertEqual(run("https://localhost/bare").returncode, 0)  # informational by default
+        self.assertEqual(run("https://localhost/weak", "--fail-on", "never", "--fail-on-missing-hsts").returncode, 0)
+        self.assertEqual(run("https://localhost/bare").returncode, 1)  # MISSING fails the default gate
+        self.assertEqual(run("https://localhost/bare", "--fail-on", "never").returncode, 0)
+        self.assertEqual(run("https://localhost/good", "--fail-on", "weak").returncode, 0)
+        self.assertEqual(run("https://localhost/quoted", "--fail-on", "weak").returncode, 1)
+        self.assertEqual(run("https://localhost/good", "--fail-on-grade", "A+").returncode, 0)
+        self.assertEqual(run("https://localhost/quoted", "--fail-on", "never", "--fail-on-grade", "B").returncode, 1)
+        self.assertEqual(run("https://localhost/good", "--fail-on-grade", "Z").returncode, 2)
 
     def test_unreachable_target(self):
         s = socket.socket()
@@ -241,11 +338,11 @@ class TestCli(unittest.TestCase):
         s.close()
         url = "https://127.0.0.1:%d/" % port
         p = run(url)
-        self.assertEqual(p.returncode, 0)
+        self.assertEqual(p.returncode, 2)  # unreachable = error, never a pass
         self.assertIn("ERROR: Could not fetch", p.stdout)
         self.assertIn("refused", p.stdout.lower())
-        self.assertEqual(run(url, "--fail-on-any-missing").returncode, 1)
-        self.assertEqual(run(url, "--fail-on-missing-hsts").returncode, 1)
+        self.assertEqual(run(url, "--fail-on", "never").returncode, 2)
+        self.assertEqual(run(url, "https://localhost/bare").returncode, 1)  # a real failure outranks the error
 
     def test_untrusted_certificate_is_an_error(self):
         p = subprocess.run([sys.executable, TOOL, "https://localhost/good"], capture_output=True, text=True,
@@ -259,10 +356,13 @@ class TestCli(unittest.TestCase):
         self.assertIn("ERROR: Could not fetch", p.stdout)
         self.assertLess(time.time() - t, 4)
 
+    def test_version(self):
+        self.assertRegex(run("--version").stdout, r"^http-header-auditor \d+\.\d+\.\d+$")
+
     def test_usage(self):
         self.assertEqual(run().returncode, 2)
         p = run("--help")
-        for opt in ("--json", "--timeout", "--fail-on-missing-hsts", "--fail-on-any-missing"):
+        for opt in ("--json", "--timeout", "--fail-on-missing-hsts", "--fail-on-any-missing", "--fail-on", "--fail-on-grade"):
             self.assertIn(opt, p.stdout)
 
 
