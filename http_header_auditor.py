@@ -40,6 +40,7 @@ __version__ = "1.2.0"
 import argparse
 import html.parser
 import json
+import re
 import sys
 import ssl
 import urllib.parse
@@ -130,6 +131,9 @@ def check_hsts(h):
     if max_age is None:
         issues.append("no max-age directive")
         score = -20
+    elif max_age == 0:
+        issues.append("max-age=0 tells browsers to forget HSTS for this host (HSTS is off)")
+        score = -20
     elif max_age < 15552000:  # 180 days
         issues.append(f"max-age={max_age}s is under 180 days (recommended >=15552000)")
         score = -10
@@ -171,13 +175,36 @@ def check_referrer(h):
                 "detail": f"'{last[0]}' sends full URLs to other sites. Raw: {val}"}
     if last and last[0] in STRICT_REFERRERS:
         return {"header": "Referrer-Policy", "status": "OK", "score": 5, "bonus": True, "detail": val}
+    known = {v.strip().lower() for v in val.split(",")} & (STRICT_REFERRERS | {"origin", "origin-when-cross-origin"})
+    if not known:
+        return {"header": "Referrer-Policy", "status": "WEAK", "score": -5,
+                "detail": f"no valid policy value, browsers ignore it. Raw: {val}"}
     return {"header": "Referrer-Policy", "status": "OK", "score": 0, "detail": val}
 
 
+def csp_directives(csp):
+    """{'script-src': ["'self'", ...], ...}; the first occurrence of a directive wins (CSP3)."""
+    out = {}
+    for directive in (csp or "").lower().split(";"):
+        tokens = directive.split()
+        if tokens and tokens[0] not in out:
+            out[tokens[0]] = tokens[1:]
+    return out
+
+
 def check_frame_protection(h):
-    xfo = h.get("x-frame-options")
-    csp = h.get("content-security-policy", "")
-    has_frame_ancestors = "frame-ancestors" in csp.lower()
+    raw_xfo = h.get("x-frame-options")
+    # only DENY and SAMEORIGIN do anything in current browsers (ALLOW-FROM and junk are ignored)
+    xfo = raw_xfo if raw_xfo and raw_xfo.split(",")[0].strip().lower() in ("deny", "sameorigin") else None
+    fa = csp_directives(h.get("content-security-policy")).get("frame-ancestors")
+    has_frame_ancestors = fa is not None and not any(t in ("*", "http:", "https:") for t in fa)
+    if raw_xfo and not xfo and not has_frame_ancestors:
+        return {"header": "X-Frame-Options / frame-ancestors", "status": "MISSING", "score": -20,
+                "detail": f"X-Frame-Options '{raw_xfo}' is not DENY or SAMEORIGIN, so browsers ignore it "
+                          f"(no clickjacking protection)"}
+    if fa is not None and not has_frame_ancestors and not xfo:
+        return {"header": "X-Frame-Options / frame-ancestors", "status": "MISSING", "score": -20,
+                "detail": "CSP frame-ancestors allows any site to frame the page (no clickjacking protection)"}
     if xfo or has_frame_ancestors:
         detail = []
         if xfo:
@@ -195,20 +222,36 @@ def check_csp(h):
     if not csp:
         return {"header": "Content-Security-Policy", "status": "MISSING", "score": -25,
                 "detail": "No CSP header -- no defense-in-depth against XSS/injection."}
-    issues = []
-    lower = csp.lower()
-    if "unsafe-inline" in lower:
-        issues.append("allows 'unsafe-inline'")
-    if "unsafe-eval" in lower:
-        issues.append("allows 'unsafe-eval'")
-    for directive in lower.split(";"):
-        tokens = directive.split()
-        if tokens and tokens[0].rstrip(":") in ("default-src", "script-src") and "*" in tokens[1:]:
-            issues.append(f"{tokens[0].rstrip(':')} is wildcard '*'")
+    # judged like the Observatory: what matters is what scripts may run (script-src, else default-src);
+    # 'unsafe-inline' only in style-src is not a script hole, and a nonce or hash makes browsers
+    # ignore 'unsafe-inline' for scripts
+    d = csp_directives(csp)
+    scripts = d.get("script-src", d.get("default-src"))
+    issues, score = [], 0
+    if scripts is not None:
+        nonce_or_hash = any(t.startswith(("'nonce-", "'sha256-", "'sha384-", "'sha512-")) for t in scripts)
+        if "'unsafe-inline'" in scripts and not nonce_or_hash:
+            issues.append("allows 'unsafe-inline' scripts")
+            score = -20
+        if "'unsafe-eval'" in scripts:
+            issues.append("allows 'unsafe-eval'")
+            score = min(score, -10)
+    for name in ("default-src", "script-src"):
+        if name in d and any(t in ("*", "http:", "https:", "data:") for t in d[name]):
+            issues.append(f"{name} is wildcard '*'" if "*" in d[name] else f"{name} allows any host by scheme")
+            score = -20
+    if scripts is None:
+        issues.append("no script-src or default-src, so scripts are unrestricted")
+        score = -20
     if issues:
-        return {"header": "Content-Security-Policy", "status": "WEAK", "score": -20,
+        return {"header": "Content-Security-Policy", "status": "WEAK", "score": score,
                 "detail": f"Present but permissive: {'; '.join(issues)}. Raw: {csp}"}
-    return {"header": "Content-Security-Policy", "status": "OK", "score": 0, "detail": csp}
+    if any("'unsafe-inline'" in v for v in d.values()):
+        return {"header": "Content-Security-Policy", "status": "OK", "score": 0,
+                "detail": csp + " ('unsafe-inline' for styles only)"}
+    strict = d.get("default-src") == ["'none'"]
+    return {"header": "Content-Security-Policy", "status": "OK", "score": 10 if strict else 5, "bonus": True,
+            "detail": csp + (" (default-src 'none')" if strict else "")}
 
 
 def check_server_leak(h):
@@ -226,51 +269,69 @@ def check_server_leak(h):
             "detail": "No version-revealing Server/X-Powered-By headers."}
 
 
-SESSION_HINTS = ("sess", "sid", "auth", "token", "login", "jwt")
+SESSION_WORDS = {"sid", "sess", "session", "sessionid", "sessid", "auth", "token", "login", "jwt", "jsessionid",
+                 "phpsessid", "aspsessionid", "remember"}
+CSRF_WORDS = {"csrf", "xsrf", "csrftoken", "xsrftoken"}
 
 
-def check_cookies(headers_raw, https=True):
+def looks_like_session(name):
+    """By name tokens (PHPSESSID, connect.sid, laravel_session, ASP.NET_SessionId, auth_token...),
+    not substrings ('consider', 'author' are not sessions). CSRF tokens are excluded: frameworks
+    (Django, Angular) need scripts to read them."""
+    words = [w.lower() for w in re.findall(r"[A-Z]?[a-z0-9]+|[A-Z]+(?![a-z])", name)]
+    if not words or any(w in CSRF_WORDS for w in words) or name.lower().replace("-", "").replace("_", "") in CSRF_WORDS:
+        return False
+    return any(w in SESSION_WORDS or w.endswith(("sessid", "sessionid")) for w in words)
+
+
+def check_cookies(headers_raw, https=True, hsts=False):
     """headers_raw is the list of (name, value) pairs, so every Set-Cookie header
     is audited, not just the last one."""
     cookies = [v for k, v in headers_raw if k.lower() == "set-cookie"]
     if not cookies:
         return {"header": "Set-Cookie", "status": "INFO", "detail": "No cookies set.", "score": 0}
-    findings = []
-    weak = False
-    score = 0
-    all_samesite = True
+    # scored like the Observatory: the worst single problem counts (not a sum), a missing Secure
+    # flag costs less when HSTS keeps the cookie off plain HTTP anyway, session cookies are held
+    # to Secure + HttpOnly, and +5 when every cookie is fine and has a valid SameSite
+    findings, penalties, all_samesite = [], [], True
     for c in cookies:
         parts = [p.strip() for p in c.split(";")]
         name = parts[0].split("=", 1)[0].strip()
         attrs = {p.split("=", 1)[0].strip().lower(): (p.split("=", 1)[1].strip() if "=" in p else "")
                  for p in parts[1:] if p}
+        session = looks_like_session(name)
         missing = [flag for flag in ("Secure", "HttpOnly", "SameSite") if flag.lower() not in attrs]
-        notes = []
-        if "samesite" not in attrs:
+        notes, before = [], len(penalties)
+        samesite = attrs.get("samesite")
+        if samesite is None or samesite.lower() not in ("strict", "lax", "none"):
             all_samesite = False
-        if attrs.get("samesite", "").lower() == "none" and "secure" not in attrs:
+        if samesite is not None and samesite.lower() not in ("strict", "lax", "none"):
+            notes.append(f"SameSite={samesite} is not Strict, Lax or None")
+            penalties.append(-20)
+        if (samesite or "").lower() == "none" and "secure" not in attrs:
             notes.append("SameSite=None without Secure is rejected by browsers")
         if name.startswith("__Host-") and ("secure" not in attrs or attrs.get("path") != "/" or "domain" in attrs):
             notes.append("__Host- prefix requires Secure, Path=/ and no Domain (browsers drop it)")
-            score -= 20
+            penalties.append(-20)
         elif name.startswith("__Secure-") and "secure" not in attrs:
             notes.append("__Secure- prefix requires Secure (browsers drop it)")
-            score -= 20
+            penalties.append(-20)
         if https and "secure" not in attrs:
-            score -= 20
-        if "httponly" not in attrs and any(hint in name.lower() for hint in SESSION_HINTS):
+            penalties.append((-10 if hsts else -40) if session else (-5 if hsts else -20))
+        if "httponly" not in attrs and session:
             notes.append("looks like a session cookie but is readable by scripts")
-            score -= 10
+            penalties.append(-30)
         if missing or notes:
-            weak = True
             findings.append(f"cookie '{name}' missing: {', '.join(missing)}" if missing else f"cookie '{name}'")
             if notes:
                 findings[-1] += " (" + "; ".join(notes) + ")"
+            elif missing == ["HttpOnly"] and len(penalties) == before:
+                findings[-1] += " (fine for a non-session cookie scripts need)"
         else:
             findings.append(f"cookie '{name}' OK")
-    out = {"header": "Set-Cookie", "status": "WEAK" if weak else "OK", "detail": "; ".join(findings),
-           "score": max(score, -40)}
-    if not weak and all_samesite:
+    out = {"header": "Set-Cookie", "status": "WEAK" if penalties else "OK", "detail": "; ".join(findings),
+           "score": min(penalties) if penalties else 0}
+    if not penalties and all_samesite:
         out["score"], out["bonus"] = 5, True
     return out
 
@@ -377,7 +438,9 @@ def audit_url(url, timeout=10):
     result["checks"].append(check_referrer(h))
     result["checks"].append(check_simple_present(h, "Permissions-Policy"))
     result["checks"].append(check_server_leak(h))
-    result["checks"].append(check_cookies(headers_raw, final_url.startswith("https://")))
+    hsts_check = result["checks"][0]
+    result["checks"].append(check_cookies(headers_raw, final_url.startswith("https://"),
+                                          hsts=hsts_check["status"] == "OK" or hsts_check["score"] == 0))
     result["checks"].append(check_cors(h))
     result["checks"].append(check_cross_origin_isolation(h))
     result["checks"].append(check_sri(final_url, h, body))

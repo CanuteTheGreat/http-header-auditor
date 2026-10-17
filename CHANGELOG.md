@@ -2,6 +2,14 @@
 
 All notable changes. Versions are git tags; each tag has a Forgejo release with checksums.
 
+## Unreleased
+
+- Scores now match the Mozilla HTTP Observatory table (checked on 18 header profiles): a CSP with `unsafe-inline` for styles only is no longer penalised as a script hole (it cost -20 and the grade), `unsafe-eval` alone is -10, a CSP without `unsafe-*` earns the +5/+10 bonus, cookies count their worst problem (session cookie without HttpOnly -30, without Secure -40, less under HSTS) instead of a capped sum.
+- Clickjacking: `X-Frame-Options` values other than DENY/SAMEORIGIN (browsers ignore them) and `frame-ancestors *` no longer count as protection.
+- `Strict-Transport-Security: max-age=0` (HSTS switched off) is treated as no HSTS; an unrecognised Referrer-Policy value is flagged.
+- Session-cookie detection uses name words, not substrings: `consider`/`author_pref` are no longer "session cookies", and CSRF cookies (`csrftoken`, `XSRF-TOKEN`) that frameworks need scripts to read aren't flagged.
+- Tests: Observatory-table accuracy suite, mutation testing (nightly), claims ledger.
+
 ## 1.2.0 - 2026-10-16
 
 - **Score and grade (A+ to F)** in the style of the Mozilla HTTP Observatory, with `--fail-on-grade`.

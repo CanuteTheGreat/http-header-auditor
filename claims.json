@@ -1,0 +1,219 @@
+{
+ "offline": false,
+ "optional_imports": [],
+ "hidden_options": [],
+ "claims": [
+  {
+   "id": "hsts",
+   "text": "Strict-Transport-Security (HSTS)",
+   "tests": [
+    "tests/test_http_header_auditor.py::TestChecks::test_good_site_all_ok",
+    "tests/test_http_header_auditor.py::TestChecks::test_weak_site",
+    "tests/test_http_header_auditor.py::TestChecks::test_quoted_max_age_csp_parsing_and_samesite_none",
+    "tests/test_http_header_auditor.py::TestChecks::test_grades",
+    "tests/test_accuracy.py::TestObservatoryTable::test_scores_and_grades"
+   ]
+  },
+  {
+   "id": "nosniff",
+   "text": "X-Content-Type-Options",
+   "tests": [
+    "tests/test_http_header_auditor.py::TestChecks::test_weak_site",
+    "tests/test_http_header_auditor.py::TestChecks::test_bare_site_missing_and_no_redirect",
+    "tests/test_accuracy.py::TestObservatoryTable::test_scores_and_grades"
+   ]
+  },
+  {
+   "id": "frame",
+   "text": "X-Frame-Options / CSP `frame-ancestors`",
+   "tests": [
+    "tests/test_http_header_auditor.py::TestChecks::test_weak_site",
+    "tests/test_http_header_auditor.py::TestChecks::test_good_site_all_ok",
+    "tests/test_accuracy.py::TestObservatoryTable::test_scores_and_grades"
+   ]
+  },
+  {
+   "id": "csp",
+   "text": "**Content-Security-Policy**: present? overly permissive for scripts",
+   "tests": [
+    "tests/test_http_header_auditor.py::TestChecks::test_weak_site",
+    "tests/test_http_header_auditor.py::TestChecks::test_quoted_max_age_csp_parsing_and_samesite_none",
+    "tests/test_accuracy.py::TestObservatoryTable::test_scores_and_grades"
+   ]
+  },
+  {
+   "id": "referrer",
+   "text": "**Referrer-Policy**: present, a value browsers understand",
+   "tests": [
+    "tests/test_http_header_auditor.py::TestChecks::test_referrer_policy",
+    "tests/test_accuracy.py::TestObservatoryTable::test_scores_and_grades"
+   ]
+  },
+  {
+   "id": "permissions",
+   "text": "Permissions-Policy",
+   "tests": [
+    "tests/test_http_header_auditor.py::TestChecks::test_bare_site_missing_and_no_redirect",
+    "tests/test_http_header_auditor.py::TestChecks::test_good_site_all_ok"
+   ]
+  },
+  {
+   "id": "server-leak",
+   "text": "Server / X-Powered-By",
+   "tests": [
+    "tests/test_http_header_auditor.py::TestChecks::test_weak_site"
+   ]
+  },
+  {
+   "id": "cookies",
+   "text": "Set-Cookie",
+   "tests": [
+    "tests/test_http_header_auditor.py::TestChecks::test_weak_site",
+    "tests/test_http_header_auditor.py::TestChecks::test_cookie_prefixes_and_session_cookies",
+    "tests/test_http_header_auditor.py::TestChecks::test_quoted_max_age_csp_parsing_and_samesite_none",
+    "tests/test_accuracy.py::TestObservatoryTable::test_scores_and_grades"
+   ]
+  },
+  {
+   "id": "cors",
+   "text": "CORS",
+   "tests": [
+    "tests/test_http_header_auditor.py::TestChecks::test_cors"
+   ]
+  },
+  {
+   "id": "coop",
+   "text": "Cross-Origin-Opener / Embedder / Resource-Policy",
+   "tests": [
+    "tests/test_http_header_auditor.py::TestChecks::test_cross_origin_isolation_headers"
+   ]
+  },
+  {
+   "id": "sri",
+   "text": "Subresource Integrity",
+   "tests": [
+    "tests/test_http_header_auditor.py::TestChecks::test_subresource_integrity"
+   ]
+  },
+  {
+   "id": "redirects",
+   "text": "Redirects",
+   "tests": [
+    "tests/test_http_header_auditor.py::TestChecks::test_redirect_to_another_host_first_is_weak",
+    "tests/test_http_header_auditor.py::TestChecks::test_http_url_input",
+    "tests/test_http_header_auditor.py::TestChecks::test_plain_http_not_served_is_info",
+    "tests/test_http_header_auditor.py::TestChecks::test_non_default_port_skips_redirect_check",
+    "tests/test_http_header_auditor.py::TestChecks::test_bare_site_missing_and_no_redirect"
+   ]
+  },
+  {
+   "id": "grade",
+   "text": "Every URL gets a **score and grade (A+ to F)**",
+   "tests": [
+    "tests/test_http_header_auditor.py::TestChecks::test_grades",
+    "tests/test_http_header_auditor.py::TestChecks::test_good_site_all_ok",
+    "tests/test_accuracy.py::TestObservatoryTable::test_scores_and_grades",
+    "tests/test_http_header_auditor.py::TestCli::test_fail_on_flags"
+   ],
+   "flags": [
+    "--fail-on-grade"
+   ]
+  },
+  {
+   "id": "observatory",
+   "text": "The numbers follow the Observatory's published table",
+   "tests": [
+    "tests/test_accuracy.py::TestObservatoryTable::test_scores_and_grades"
+   ]
+  },
+  {
+   "id": "exit-codes",
+   "text": "Exit codes (same convention as every Errant Solutions tool)",
+   "tests": [
+    "tests/test_http_header_auditor.py::TestCli::test_fail_on_flags",
+    "tests/test_http_header_auditor.py::TestCli::test_unreachable_target",
+    "tests/test_http_header_auditor.py::TestCli::test_untrusted_certificate_is_an_error",
+    "tests/test_http_header_auditor.py::TestCli::test_usage"
+   ],
+   "flags": [
+    "--fail-on",
+    "--fail-on-missing-hsts",
+    "--fail-on-any-missing"
+   ]
+  },
+  {
+   "id": "timeout",
+   "text": "`--timeout N` sets the per-request\ntimeout",
+   "tests": [
+    "tests/test_http_header_auditor.py::TestCli::test_timeout_option"
+   ],
+   "flags": [
+    "--timeout"
+   ]
+  },
+  {
+   "id": "json",
+   "text": "http-header-auditor https://example.com --json",
+   "tests": [
+    "tests/test_http_header_auditor.py::TestChecks::test_good_site_all_ok"
+   ],
+   "flags": [
+    "--json"
+   ]
+  },
+  {
+   "id": "stdlib-only",
+   "text": "A stdlib-only, zero-dependency live HTTP security header scanner",
+   "tests": [
+    "tests/test_claims.py::TestClaims::test_stdlib_only"
+   ]
+  },
+  {
+   "id": "install-pipx",
+   "text": "pipx install git+https://git.canutethegreat.com/CanuteTheGreat/http-header-auditor.git",
+   "tests": [
+    "ci/install-channels.sh#pipx install -q \"git+$FORGEJO/CanuteTheGreat/$REPO.git\"",
+    ".forgejo/workflows/nightly.yml#ci/install-channels.sh"
+   ]
+  },
+  {
+   "id": "install-homebrew",
+   "text": "brew install canutethegreat/errant-tools/http-header-auditor",
+   "tests": [
+    "repo:homebrew-errant-tools/Formula/http-header-auditor.rb#test do",
+    "repo:homebrew-errant-tools/.forgejo/workflows/test.yml#ci/run-tests.sh"
+   ]
+  },
+  {
+   "id": "install-scoop",
+   "text": "scoop install errant-tools/http-header-auditor",
+   "tests": [
+    "repo:scoop-errant-tools/bucket/http-header-auditor.json#\"bin\"",
+    "repo:scoop-errant-tools/.forgejo/workflows/test.yml#ci/run-tests.sh"
+   ]
+  },
+  {
+   "id": "install-download",
+   "text": "https://errant.solutions/downloads/http_header_auditor.py",
+   "tests": [
+    "ci/install-channels.sh#https://errant.solutions/downloads/$FILE"
+   ]
+  },
+  {
+   "id": "release-assets",
+   "text": "`SHA256SUMS` file",
+   "tests": [
+    "ci/install-channels.sh#sha256sum -c SHA256SUMS",
+    "ci/release.py#SHA256SUMS"
+   ]
+  },
+  {
+   "id": "python-versions",
+   "text": "Python 3.8+",
+   "tests": [
+    ".forgejo/workflows/test.yml#python: [\"3.8",
+    ".forgejo/workflows/nightly.yml#python: [\"3.8"
+   ]
+  }
+ ]
+}

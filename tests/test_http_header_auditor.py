@@ -159,6 +159,7 @@ def setUpModule():
 def tearDownModule():
     for s in SERVERS:
         s.shutdown()
+        s.server_close()  # free ports 443/80 for the next module that serves them
     shutil.rmtree(TMP, ignore_errors=True)
 
 
@@ -182,7 +183,8 @@ class TestChecks(unittest.TestCase):
         bad = {k: v for k, v in c.items() if v["status"] != "OK" and k != "COOP / COEP / CORP"}
         self.assertEqual(bad, {})
         self.assertEqual(c["COOP / COEP / CORP"]["status"], "INFO")
-        self.assertEqual((r["score"], r["grade"]), (120, "A+"))  # 100 + preload + frame-ancestors + referrer + SameSite
+        # 100 + preload-eligible HSTS + CSP without unsafe + frame-ancestors + strict referrer + SameSite
+        self.assertEqual((r["score"], r["grade"]), (125, "A+"))
         self.assertTrue(c["Strict-Transport-Security"]["preload_eligible"])
         self.assertEqual(c["Set-Cookie"]["detail"], "cookie 'sid' OK; cookie 'csrf' OK")
         self.assertIn("http:// redirects to https://localhost/good", c["HTTP->HTTPS redirect"]["detail"])
@@ -242,7 +244,7 @@ class TestChecks(unittest.TestCase):
         self.assertIn("cookie '__Secure-pref' missing: Secure (__Secure- prefix requires Secure", d)
         self.assertIn("cookie 'session_token' missing: HttpOnly (looks like a session cookie", d)
         self.assertIn("cookie '__Host-ok' OK", d)
-        self.assertEqual(c["Set-Cookie"]["score"], -40)  # capped
+        self.assertEqual(c["Set-Cookie"]["score"], -30)  # the worst single problem: a script-readable session cookie
 
     def test_cors(self):
         _, _, c = audit("https://localhost/cors-echo")
@@ -309,7 +311,7 @@ class TestCli(unittest.TestCase):
     def test_text_report(self):
         p = run("https://localhost/weak", "https://localhost/good")
         self.assertEqual(p.returncode, 1)  # /weak has MISSING checks: the default gate
-        self.assertIn("Grade: A+  (score 120/100)", p.stdout)
+        self.assertIn("Grade: A+  (score 125/100)", p.stdout)
         self.assertIn("=== https://localhost/weak ===", p.stdout)
         self.assertIn("=== https://localhost/good ===", p.stdout)
         self.assertIn("Final URL: https://localhost/good  (HTTP 200)", p.stdout)

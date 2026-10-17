@@ -8,9 +8,12 @@ keys, no browser, no third-party services -- just Python 3's `urllib`.
 - **Strict-Transport-Security (HSTS)**: present? `includeSubDomains`? long enough `max-age`?
   Eligible for the browser preload list (1 year + `includeSubDomains` + `preload`)?
 - **X-Content-Type-Options**: `nosniff` present?
-- **X-Frame-Options / CSP `frame-ancestors`**: clickjacking protection?
-- **Content-Security-Policy**: present? overly permissive (`unsafe-inline`, `unsafe-eval`, wildcard `default-src`/`script-src`)?
-- **Referrer-Policy**: present, and not `unsafe-url`/`no-referrer-when-downgrade`?
+- **X-Frame-Options / CSP `frame-ancestors`**: clickjacking protection? (only `DENY`/`SAMEORIGIN`
+  count, browsers ignore other values; `frame-ancestors *` protects nothing)
+- **Content-Security-Policy**: present? overly permissive for scripts (`unsafe-inline` without a
+  nonce/hash, `unsafe-eval`, wildcard `default-src`/`script-src`)? `unsafe-inline` for styles only
+  is not a script hole and isn't penalised
+- **Referrer-Policy**: present, a value browsers understand, and not `unsafe-url`/`no-referrer-when-downgrade`?
 - **Permissions-Policy**: present?
 - **Server / X-Powered-By**: leaking stack/version info?
 - **Set-Cookie**: `Secure` / `HttpOnly` / `SameSite` on every cookie (each `Set-Cookie`
@@ -30,9 +33,14 @@ Every URL gets a **score and grade (A+ to F)** in the style of the Mozilla HTTP
 Observatory: start at 100, subtract penalties (no CSP -25, no HSTS -20, no clickjacking
 protection -20, no HTTP->HTTPS redirect -20, cookies without `Secure` -20, credentialed
 CORS for any origin -50, scripts over plain HTTP -50, ...), and add bonuses (preload-eligible
-HSTS, `frame-ancestors`, strict Referrer-Policy, SameSite on every cookie, SRI everywhere)
-only once the score is 90 or more. The numbers follow the Observatory's published table
-closely but this is an independent implementation, so grades can differ slightly.
+HSTS, a CSP without `unsafe-*` (+5, +10 with `default-src 'none'`), `frame-ancestors`, strict
+Referrer-Policy, SameSite on every cookie, SRI everywhere) only once the score is 90 or more.
+Cookies count their worst single problem, as in the Observatory (a session cookie without
+`HttpOnly` -30, without `Secure` -40, or -10/-5 when HSTS already keeps cookies off plain HTTP).
+The numbers follow the Observatory's published table (`tests/test_accuracy.py` checks 18 header
+profiles against it) with two deliberate differences: preload *eligibility* earns the HSTS bonus
+(the tool can't see the browser preload list) and `max-age=0` counts as no HSTS (-20, it switches
+HSTS off) rather than "under six months" (-10).
 
 ## Install
 
