@@ -12,8 +12,11 @@ keys, no browser, no third-party services -- just Python 3's `urllib`.
 - **Referrer-Policy**: present?
 - **Permissions-Policy**: present?
 - **Server / X-Powered-By**: leaking stack/version info?
-- **Set-Cookie**: `Secure` / `HttpOnly` / `SameSite` flags on any cookies?
-- **HTTP -> HTTPS redirect**: does plain `http://` actually redirect?
+- **Set-Cookie**: `Secure` / `HttpOnly` / `SameSite` flags on every cookie set (each
+  `Set-Cookie` header separately), plus `SameSite=None` without `Secure`
+- **HTTP -> HTTPS redirect**: does plain `http://` actually redirect? (For an `https://`
+  URL on the default port the `http://` twin is checked too; if nothing listens on plain
+  HTTP at all, that's reported as info.)
 
 ## Usage
 
@@ -25,7 +28,9 @@ python3 http_header_auditor.py https://example.com --fail-on-missing-hsts  # exi
 ```
 
 By default the tool always exits 0 (it's informational). Use the `--fail-on-*`
-flags to opt into CI gating.
+flags to opt into CI gating; with either flag set, a target that can't be fetched at
+all (connection or certificate error) also exits 1. `--timeout N` sets the per-request
+timeout in seconds (default 10). Python 3.8+.
 
 ## Why this exists
 

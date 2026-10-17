@@ -21,7 +21,8 @@ Checks performed:
 
 Output: human-readable report by default, or --json for machine-readable output.
 Exit code: 0 always by default (informational tool); pass --fail-on-missing-hsts
-or --fail-on-any-missing to opt into non-zero exit codes for CI gating.
+or --fail-on-any-missing to opt into non-zero exit codes for CI gating (a target
+that can't be fetched at all also exits 1 when either flag is set).
 
 No third-party libraries. Uses only urllib from the Python standard library.
 """
@@ -30,9 +31,9 @@ import argparse
 import json
 import sys
 import ssl
+import urllib.parse
 import urllib.request
 import urllib.error
-from http.client import HTTPResponse
 
 
 USER_AGENT = "http-header-auditor/1.0 (+https://errant.solutions)"
@@ -57,19 +58,24 @@ def fetch(url, timeout=10, allow_redirects=True):
         resp = opener.open(req, timeout=timeout)
         final_url = resp.geturl()
         status = resp.status
-        headers = {k: v for k, v in resp.getheaders()}
+        headers = list(resp.getheaders())  # list of pairs: Set-Cookie may repeat
         resp.close()
         return final_url, status, headers, redirect_chain
     except urllib.error.HTTPError as e:
-        headers = {k: v for k, v in e.headers.items()} if e.headers else {}
+        headers = list(e.headers.items()) if e.headers else []
         return e.url or current_url, e.code, headers, redirect_chain
     except Exception as e:
-        return None, None, {}, redirect_chain
+        reason = getattr(e, "reason", None) or e
+        return None, str(reason), [], redirect_chain
 
 
 def norm_headers(headers):
-    """Case-insensitive header lookup dict."""
-    return {k.lower(): v for k, v in headers.items()}
+    """Case-insensitive header lookup dict (repeated headers joined with ', ')."""
+    out = {}
+    for k, v in headers:
+        k = k.lower()
+        out[k] = out[k] + ", " + v if k in out else v
+    return out
 
 
 def check_hsts(h):
@@ -82,7 +88,7 @@ def check_hsts(h):
         part = part.strip()
         if part.lower().startswith("max-age="):
             try:
-                max_age = int(part.split("=", 1)[1])
+                max_age = int(part.split("=", 1)[1].strip().strip('"'))
             except ValueError:
                 pass
     include_sub = "includesubdomains" in val.lower()
@@ -138,8 +144,10 @@ def check_csp(h):
         issues.append("allows 'unsafe-inline'")
     if "unsafe-eval" in lower:
         issues.append("allows 'unsafe-eval'")
-    if "default-src *" in lower or "default-src: *" in lower:
-        issues.append("default-src is wildcard '*'")
+    for directive in lower.split(";"):
+        tokens = directive.split()
+        if tokens and tokens[0].rstrip(":") in ("default-src", "script-src") and "*" in tokens[1:]:
+            issues.append(f"{tokens[0].rstrip(':')} is wildcard '*'")
     if issues:
         return {"header": "Content-Security-Policy", "status": "WEAK",
                 "detail": f"Present but permissive: {'; '.join(issues)}. Raw: {csp}"}
@@ -162,31 +170,30 @@ def check_server_leak(h):
 
 
 def check_cookies(headers_raw):
-    # headers_raw may have multiple Set-Cookie values; http.client folds them
-    # into one comma-joined string in some cases, so split conservatively.
-    cookies = []
-    for k, v in headers_raw.items():
-        if k.lower() == "set-cookie":
-            cookies.append(v)
+    """headers_raw is the list of (name, value) pairs, so every Set-Cookie header
+    is audited, not just the last one."""
+    cookies = [v for k, v in headers_raw if k.lower() == "set-cookie"]
     if not cookies:
         return {"header": "Set-Cookie", "status": "INFO", "detail": "No cookies set."}
     findings = []
+    weak = False
     for c in cookies:
-        flags_lower = c.lower()
-        missing = []
-        if "secure" not in flags_lower:
-            missing.append("Secure")
-        if "httponly" not in flags_lower:
-            missing.append("HttpOnly")
-        if "samesite" not in flags_lower:
-            missing.append("SameSite")
-        name = c.split("=", 1)[0]
-        if missing:
-            findings.append(f"cookie '{name}' missing: {', '.join(missing)}")
+        parts = [p.strip() for p in c.split(";")]
+        name = parts[0].split("=", 1)[0].strip()
+        attrs = {p.split("=", 1)[0].strip().lower(): (p.split("=", 1)[1].strip() if "=" in p else "")
+                 for p in parts[1:] if p}
+        missing = [flag for flag in ("Secure", "HttpOnly", "SameSite") if flag.lower() not in attrs]
+        notes = []
+        if attrs.get("samesite", "").lower() == "none" and "secure" not in attrs:
+            notes.append("SameSite=None without Secure is rejected by browsers")
+        if missing or notes:
+            weak = True
+            findings.append(f"cookie '{name}' missing: {', '.join(missing)}" if missing else f"cookie '{name}'")
+            if notes:
+                findings[-1] += " (" + "; ".join(notes) + ")"
         else:
             findings.append(f"cookie '{name}' OK")
-    status = "WEAK" if any("missing" in f for f in findings) else "OK"
-    return {"header": "Set-Cookie", "status": status, "detail": "; ".join(findings)}
+    return {"header": "Set-Cookie", "status": "WEAK" if weak else "OK", "detail": "; ".join(findings)}
 
 
 def audit_url(url, timeout=10):
@@ -198,7 +205,7 @@ def audit_url(url, timeout=10):
 
     final_url, status, headers_raw, redirects = fetch(https_url, timeout=timeout)
     if final_url is None:
-        result["error"] = f"Could not fetch {https_url} (connection/SSL error)."
+        result["error"] = f"Could not fetch {https_url} (connection/SSL error: {status})."
         return result
 
     h = norm_headers(headers_raw)
@@ -214,15 +221,28 @@ def audit_url(url, timeout=10):
     result["checks"].append(check_server_leak(h))
     result["checks"].append(check_cookies(headers_raw))
 
-    # HTTP -> HTTPS redirect check (only meaningful if original was http://)
+    # HTTP -> HTTPS redirect check. For an https:// URL the plain-HTTP twin is
+    # derived on port 80 (skipped when the URL names a non-default port, since the
+    # matching HTTP port can't be known).
+    http_url = None
     if url.startswith("http://"):
-        http_final, http_status, _, http_redirects = fetch(url, timeout=timeout)
+        http_url = url
+    elif url.startswith("https://"):
+        netloc = urllib.parse.urlsplit(url).netloc
+        if ":" not in netloc.rsplit("]", 1)[-1]:
+            http_url = "http://" + url[len("https://"):]
+    if http_url:
+        http_final, http_status, _, http_redirects = fetch(http_url, timeout=timeout)
         if http_final and http_final.startswith("https://"):
             result["checks"].append({"header": "HTTP->HTTPS redirect", "status": "OK",
                                       "detail": f"http:// redirects to {http_final}"})
+        elif http_final is None:
+            result["checks"].append({"header": "HTTP->HTTPS redirect", "status": "INFO",
+                                      "detail": f"Plain HTTP not served ({http_status}) -- nothing to redirect."})
         else:
             result["checks"].append({"header": "HTTP->HTTPS redirect", "status": "MISSING",
-                                      "detail": "Plain HTTP does not redirect to HTTPS."})
+                                      "detail": f"Plain HTTP does not redirect to HTTPS (HTTP {http_status} "
+                                                f"at {http_final})."})
 
     return result
 
@@ -259,6 +279,8 @@ def main():
 
     exit_code = 0
     for r in results:
+        if "error" in r and (args.fail_on_any_missing or args.fail_on_missing_hsts):
+            exit_code = 1  # an unreachable target must not pass a CI gate
         for c in r.get("checks", []):
             if args.fail_on_any_missing and c["status"] == "MISSING":
                 exit_code = 1
