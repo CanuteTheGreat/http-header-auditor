@@ -46,7 +46,7 @@ HSTS off) rather than "under six months" (-10).
 
 ```sh
 pipx install git+https://git.canutethegreat.com/CanuteTheGreat/http-header-auditor.git        # latest release branch; puts `http-header-auditor` on PATH
-pipx install git+https://git.canutethegreat.com/CanuteTheGreat/http-header-auditor.git@v1.2.0  # a pinned release
+pipx install git+https://git.canutethegreat.com/CanuteTheGreat/http-header-auditor.git@v1.2.1  # a pinned release
 brew install canutethegreat/errant-tools/http-header-auditor   # after: brew tap canutethegreat/errant-tools https://git.canutethegreat.com/CanuteTheGreat/homebrew-errant-tools
 scoop install errant-tools/http-header-auditor                 # after: scoop bucket add errant-tools https://git.canutethegreat.com/CanuteTheGreat/scoop-errant-tools
 ```

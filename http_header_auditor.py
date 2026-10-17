@@ -35,7 +35,7 @@ meets --fail-on-grade, 1 = otherwise, 2 = a target couldn't be fetched at all
 No third-party libraries. Uses only urllib from the Python standard library.
 """
 
-__version__ = "1.2.0"
+__version__ = "1.2.1"
 
 import argparse
 import html.parser

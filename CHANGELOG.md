@@ -2,7 +2,7 @@
 
 All notable changes. Versions are git tags; each tag has a Forgejo release with checksums.
 
-## Unreleased
+## 1.2.1 - 2026-10-17
 
 - Scores now match the Mozilla HTTP Observatory table (checked on 18 header profiles): a CSP with `unsafe-inline` for styles only is no longer penalised as a script hole (it cost -20 and the grade), `unsafe-eval` alone is -10, a CSP without `unsafe-*` earns the +5/+10 bonus, cookies count their worst problem (session cookie without HttpOnly -30, without Secure -40, less under HSTS) instead of a capped sum.
 - Clickjacking: `X-Frame-Options` values other than DENY/SAMEORIGIN (browsers ignore them) and `frame-ancestors *` no longer count as protection.
