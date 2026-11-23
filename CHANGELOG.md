@@ -2,6 +2,13 @@
 
 All notable changes. Versions are git tags; each tag has a Forgejo release with checksums.
 
+## 2.0.0 - 2026-11-23
+
+- Shared CLI contract across the Errant Solutions tools ([docs/CLI-CONTRACT.md](docs/CLI-CONTRACT.md)): exit 0 clean, 1 findings, 2 usage/input error, 3 unexpected runtime error (an uncaught exception used to be a traceback with exit 1). Exit codes this tool already documented for other cases are kept and marked legacy in the README.
+- New `--quiet` / `-q`: no stdout, exit code only (errors stay on stderr).
+- **Changed (breaking for `--json` consumers):** `--json` now prints one object `{"schema_version": 1, "tool", "version", "exit_code", "results": [...]}`; the previous top-level list is now the `results` value, unchanged. Major version bump for that reason.
+- The JSON Schema of the `--json` output is in `schema/`; contract tests (exit codes, JSON against the schema, quiet, stderr) run on every push, and the push trigger now covers every branch.
+
 ## 1.2.1 - 2026-10-17
 
 - Scores now match the Mozilla HTTP Observatory table (checked on 18 header profiles): a CSP with `unsafe-inline` for styles only is no longer penalised as a script hole (it cost -20 and the grade), `unsafe-eval` alone is -10, a CSP without `unsafe-*` earns the +5/+10 bonus, cookies count their worst problem (session cookie without HttpOnly -30, without Secure -40, less under HSTS) instead of a capped sum.

@@ -171,7 +171,7 @@ def run(*args):
 
 def audit(url, *extra):
     p = run(url, "--json", *extra)
-    res = json.loads(p.stdout)
+    res = json.loads(p.stdout)["results"]
     return p, res[0], {c["header"]: c for c in res[0].get("checks", [])}
 
 

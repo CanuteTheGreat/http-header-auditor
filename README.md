@@ -46,7 +46,7 @@ HSTS off) rather than "under six months" (-10).
 
 ```sh
 pipx install git+https://git.canutethegreat.com/CanuteTheGreat/http-header-auditor.git        # latest release branch; puts `http-header-auditor` on PATH
-pipx install git+https://git.canutethegreat.com/CanuteTheGreat/http-header-auditor.git@v1.2.1  # a pinned release
+pipx install git+https://git.canutethegreat.com/CanuteTheGreat/http-header-auditor.git@v2.0.0  # a pinned release
 brew install canutethegreat/errant-tools/http-header-auditor   # after: brew tap canutethegreat/errant-tools https://git.canutethegreat.com/CanuteTheGreat/homebrew-errant-tools
 scoop install errant-tools/http-header-auditor                 # after: scoop bucket add errant-tools https://git.canutethegreat.com/CanuteTheGreat/scoop-errant-tools
 ```
@@ -67,13 +67,19 @@ http-header-auditor https://example.com --fail-on-grade B     # exit 1 if the gr
 http-header-auditor https://example.com --fail-on never       # report only
 ```
 
-Exit codes (same convention as every Errant Solutions tool):
+Exit codes (the shared Errant Solutions CLI contract, see [docs/CLI-CONTRACT.md](docs/CLI-CONTRACT.md)):
 
 | Code | Meaning |
 |---|---|
 | 0 | no check at or above `--fail-on` (default `missing`: MISSING or FAIL) and the grade meets `--fail-on-grade` |
 | 1 | otherwise |
-| 2 | a target couldn't be fetched at all (connection or certificate error) and nothing else failed, or bad usage |
+| 2 | bad usage; also (legacy, kept so existing scripts keep working) a target couldn't be fetched at all (connection or certificate error) and nothing else failed |
+| 3 | unexpected runtime error (message on stderr) |
+
+`--json` prints one object with `schema_version` (currently 1), `tool`, `version`, `exit_code` and `results` (one entry per URL;
+2.0.0 changed this from a bare top-level list, which is now the `results` value). Its JSON Schema is
+[schema/http-header-auditor.schema.json](schema/http-header-auditor.schema.json). `--quiet` (`-q`) prints nothing on stdout, so the exit
+code is the whole answer; errors always go to stderr.
 
 `--fail-on-missing-hsts` still works (exit 1 on missing HSTS even with `--fail-on never`);
 `--fail-on-any-missing` is the same as the default. `--timeout N` sets the per-request

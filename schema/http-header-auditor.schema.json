@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http-header-auditor --json output (schema_version 1)",
+  "type": "object",
+  "required": ["schema_version", "tool", "version", "exit_code", "results"],
+  "properties": {
+    "schema_version": {"type": "integer", "const": 1},
+    "tool": {"type": "string", "const": "http-header-auditor"},
+    "version": {"type": "string"},
+    "exit_code": {"type": "integer", "enum": [0, 1, 2]},
+    "results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["url", "checks"],
+        "properties": {
+          "url": {"type": "string"},
+          "error": {"type": "string"},
+          "final_url": {"type": "string"},
+          "status_code": {"type": "integer"},
+          "score": {"type": "integer"},
+          "grade": {"type": "string"},
+          "checks": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["header", "status"],
+              "properties": {
+                "header": {"type": "string"},
+                "status": {"type": "string"},
+                "detail": {"type": "string"}
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

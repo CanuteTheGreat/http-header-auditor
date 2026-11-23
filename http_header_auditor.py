@@ -27,15 +27,17 @@ Checks performed:
 Every URL gets an Observatory-style score (start at 100, penalties, bonuses
 once the score is 90+) and a grade from A+ to F.
 
-Output: human-readable report by default, or --json for machine-readable output.
-Exit codes: 0 = nothing at or above --fail-on (default: missing) and the grade
-meets --fail-on-grade, 1 = otherwise, 2 = a target couldn't be fetched at all
-(when nothing else failed) or bad usage.
+Output: human-readable report by default, or --json for machine-readable output (one object
+with schema_version, tool, version, exit_code and results), --quiet for no stdout at all.
+Exit codes (shared CLI contract, docs/CLI-CONTRACT.md): 0 = nothing at or above --fail-on
+(default: missing) and the grade meets --fail-on-grade, 1 = otherwise, 2 = bad usage, or
+(legacy, kept) a target couldn't be fetched at all (when nothing else failed), 3 = unexpected
+runtime error.
 
 No third-party libraries. Uses only urllib from the Python standard library.
 """
 
-__version__ = "1.2.1"
+__version__ = "2.0.0"
 
 import argparse
 import html.parser
@@ -496,9 +498,18 @@ def print_report(results):
 
 
 def main(argv=None):
+    """Entry point. Any unexpected exception is a runtime error (exit 3), never a bare traceback exit 1."""
+    try:
+        return _main(argv)
+    except Exception as exc:  # SystemExit (argparse usage errors, exit 2) is not an Exception
+        print("http-header-auditor: error: %s: %s" % (type(exc).__name__, exc), file=sys.stderr)
+        return 3
+
+
+def _main(argv=None):
     ap = argparse.ArgumentParser(prog="http-header-auditor", description="Live HTTP security header auditor (stdlib-only).",
                                  epilog="Exit codes: 0 clean, 1 checks at/above --fail-on or grade below --fail-on-grade, "
-                                        "2 a target could not be fetched or bad usage.")
+                                        "2 a target could not be fetched or bad usage, 3 unexpected error.")
     ap.add_argument("--version", action="version", version="%(prog)s " + __version__)
     ap.add_argument("urls", nargs="+", help="One or more URLs to audit (https:// or http://)")
     ap.add_argument("--json", action="store_true", help="Output machine-readable JSON instead of text")
@@ -511,14 +522,11 @@ def main(argv=None):
                     help="Exit 1 if any target is missing HSTS (even with --fail-on never)")
     ap.add_argument("--fail-on-any-missing", action="store_true",
                     help="Same as --fail-on missing (kept for 1.x scripts)")
+    ap.add_argument("-q", "--quiet", action="store_true",
+                    help="print nothing on stdout; the exit code (and errors on stderr) are the result")
     args = ap.parse_args(argv)
 
     results = [audit_url(u, timeout=args.timeout) for u in args.urls]
-
-    if args.json:
-        print(json.dumps(results, indent=2))
-    else:
-        print_report(results)
 
     statuses = {"missing": ("MISSING", "FAIL"), "weak": ("MISSING", "FAIL", "WEAK"), "never": ()}[
         "missing" if args.fail_on_any_missing else args.fail_on]
@@ -533,7 +541,15 @@ def main(argv=None):
                 failed = True
         if args.fail_on_grade and "grade" in r and GRADE_ORDER.index(r["grade"]) > GRADE_ORDER.index(args.fail_on_grade):
             failed = True
-    return 1 if failed else (2 if errored else 0)
+    code = 1 if failed else (2 if errored else 0)
+    if args.quiet:
+        pass
+    elif args.json:
+        print(json.dumps({"schema_version": 1, "tool": "http-header-auditor", "version": __version__,
+                          "exit_code": code, "results": results}, indent=2))
+    else:
+        print_report(results)
+    return code
 
 
 if __name__ == "__main__":
